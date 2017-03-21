@@ -17,20 +17,20 @@ typedef std::vector< std::vector<int> > AdjacencyMatrix;
 AdjacencyMatrix adjMatrix;
 
 int threads_per_block = 256;
-int blocks = (int)(10000/threads_per_block+1);
+int blocks = (int)(5000/threads_per_block+1);
 int n;
 
-//void printAdjMatrix(AdjacencyMatrix adjMatrix)
-//{
-    //for (int i=0; i<adjMatrix.size(); i++)
-    //{
-        //for (int j=0; j<adjMatrix[i].size(); j++) 
-        //{
-      //      std::cout << adjMatrix[i][j] << " ";
-    //    }
-  //      std::cout << std::endl;
-//    }
-//}
+void printAdjMatrix(AdjacencyMatrix adjMatrix)
+{
+    for (int i=0; i<adjMatrix.size(); i++)
+    {
+        for (int j=0; j<adjMatrix[i].size(); j++) 
+        {
+            std::cout << adjMatrix[i][j] << " ";
+        }
+        std::cout << std::endl;
+    }
+}
 __global__ void clustCoeff_Parallel(int *matrix, float *output,int n)
 {
     double totalC = 0.0;
@@ -101,13 +101,27 @@ double clustCoeff_Serial(AdjacencyMatrix matrix)
             }
             //std::cout<<mCount<<std::endl;
             total.push_back((mCount)/(nCount*(nCount-1.0)));
-            std::cout<<x<<": "<<total[x]<<std::endl;
             totalC += total[x];
         }
-        std::cout<<totalC<<std::endl;
         double result = ((1.0/n)*totalC);
-        std::cout<<"Total: "<<result<<std::endl;
+        std::cout<<"\nSerial Coeffecient: "<<result<<std::endl;
         return 0.0;//result;
+}
+long long start_timer() {
+	struct timeval tv;
+	gettimeofday(&tv, NULL);
+	return tv.tv_sec * 1000000 + tv.tv_usec;
+}
+
+
+// Prints the time elapsed since the specified time
+long long stop_timer(long long start_time, std::string name) {
+	struct timeval tv;
+	gettimeofday(&tv, NULL);
+	long long end_time = tv.tv_sec * 1000000 + tv.tv_usec;
+        std::cout << std::setprecision(5);	
+	std::cout << name << ": " << ((float) (end_time - start_time)) / (1000 * 1000) << " sec\n";
+	return end_time - start_time;
 }
 void checkErrors(const char label[])
 {
@@ -133,7 +147,7 @@ void checkErrors(const char label[])
 }
 int main()
 {
-    std::fstream myfile("toyGraph1.txt",std::ios_base::in);
+    std::fstream myfile("toyGraph.txt",std::ios_base::in);
     int u,v;
     int maxNode = 0;
     std::vector< std::pair<int,int> > allEdges;
@@ -163,40 +177,45 @@ int main()
 
 
     //TODO: Write serial clustering coefficent code; include timing and error checking
-    std::cout<<"Serial computation:"<<std::endl;
+   
+    long long serial_start = start_timer();
     clustCoeff_Serial(adjMatrix);
-    std::cout<<std::endl<<"Parallel computation:"<<std::endl;
+    long long serial_end = stop_timer(serial_start,"Serial Run Time");
+    
     //TODO: Write parallel clustering cofficient code; include timing and error checking
     int *d_input;
+    //int *d_temp = (int*)malloc(n*n*sizeof(int));
     int *d_temp = new int[n*n];
     float *d_output;
     float *h_gpu_result = (float*)malloc(n*sizeof(float));
     cudaMalloc((void **) &d_input, sizeof(int)*n*n);
     cudaMalloc((void **) &d_output, n*sizeof(float));
-    checkErrors("MAlloc");
+    //checkErrors("MAlloc");
     for (int i =0;i<n;i++){
 	for(int j =0;j<n;j++){
 	d_temp[(i*n)+j]=adjMatrix[i][j]; 
 	}
     }
-    //Source array maps values properly
-    //Copying source array to device seems to not be working
-    cudaMemcpy(d_input, d_temp, (n*n*sizeof(int)), cudaMemcpyHostToDevice);
-    checkErrors("memCopy");
-
-    clustCoeff_Parallel<<<blocks,threads_per_block>>>(d_input,d_output,n);
-    //cudaThreadSynchronize();
-    cudaMemcpy(h_gpu_result, d_output, n*sizeof(float), cudaMemcpyDeviceToHost);
     cudaThreadSynchronize();
-    //cudaFree(d_output);
-    //cudaFree(d_input);
+    cudaMemcpy(d_input, d_temp, (n*n*sizeof(int)), cudaMemcpyHostToDevice);
+    //checkErrors("memCopy");
+
+    long long parallel_start = start_timer();
+    clustCoeff_Parallel<<<blocks,threads_per_block>>>(d_input,d_output,n);
+    cudaMemcpy(h_gpu_result, d_output, n*sizeof(float), cudaMemcpyDeviceToHost);
     float coef=0.0;
     for(int j =0;j<n;j++){
     coef += h_gpu_result[j];
-    std::cout<<j<<": "<<h_gpu_result[j]<<std::endl;
     }
-        
-    std::cout<<"Coeffecient is: "<<(coef/n)<<std::endl;
+    
+    long long parallel_stop = stop_timer(parallel_start,"\nParallel Run Time");
+    std::cout<<"Parallel coeffecient is: "<<(coef/n)<<std::endl;
+    //checkErrors("Kernal");
+    
+    cudaThreadSynchronize();
+    cudaFree(d_output);
+    cudaFree(d_input);
+    
     //TODO: Compare serial and parallel results
 
     return 0;
