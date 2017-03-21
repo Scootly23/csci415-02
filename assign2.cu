@@ -20,31 +20,31 @@ int threads_per_block = 256;
 int blocks = (int)(10000/threads_per_block+1);
 int n;
 
-void printAdjMatrix(AdjacencyMatrix adjMatrix)
-{
-    for (int i=0; i<adjMatrix.size(); i++)
-    {
-        for (int j=0; j<adjMatrix[i].size(); j++) 
-        {
-            std::cout << adjMatrix[i][j] << " ";
-        }
-        std::cout << std::endl;
-    }
-}
-__global__ void clustCoeff_Parallel(float *matrix, float *output,int n)
+//void printAdjMatrix(AdjacencyMatrix adjMatrix)
+//{
+    //for (int i=0; i<adjMatrix.size(); i++)
+    //{
+        //for (int j=0; j<adjMatrix[i].size(); j++) 
+        //{
+      //      std::cout << adjMatrix[i][j] << " ";
+    //    }
+  //      std::cout << std::endl;
+//    }
+//}
+__global__ void clustCoeff_Parallel(int *matrix, float *output,int n)
 {
     double totalC = 0.0;
     int x = blockDim.x * blockIdx.x + threadIdx.x;
+
     if(x < n)
     {
-	int size = (n*n);
-	printf("%d\n",size);
+	const int size = (n*n);
 	
         int *temp = new int[size];
         int nCount = 0;
         int mCount = 0;
         for(int y = 0;y<n;y++)
-        { 
+        {
 	    int b = matrix[x*n+y];
             if(b==1)
             {
@@ -53,32 +53,22 @@ __global__ void clustCoeff_Parallel(float *matrix, float *output,int n)
             }
 
         }
-        //This only does 6 iterations even though size is set to 36
-	for(int i=0;i<size;i++)
-	{
-        //Values from source array not translating properly
-	printf("m: %d\n",matrix[i]);
-	}
+       
         for(int p =0;p<nCount;p++ )
         {
             for(int q =0;q<n;q++)
             {
-		printf("%d\n",(temp[p]*n+q));
                 if(matrix[temp[p]*n+q] == 1 && matrix[q*n+x] == 1)
                 {
-                    //mCount++;
-		    
-		    
+                    mCount++;	    
                 }
             }
                 
         }
         
-        //output[x]=((mCount)/(nCount*(nCount-1.0)));
-        //totalC += output[x];
+        output[x]=((mCount)/(nCount*(nCount-1.0)));
+        totalC += output[x];
    }
-        //output[x] = 4;
-
 }
 double clustCoeff_Serial(AdjacencyMatrix matrix)
 {  std::vector<double> total;
@@ -119,6 +109,28 @@ double clustCoeff_Serial(AdjacencyMatrix matrix)
         std::cout<<"Total: "<<result<<std::endl;
         return 0.0;//result;
 }
+void checkErrors(const char label[])
+{
+  // we need to synchronise first to catch errors due to
+  // asynchroneous operations that would otherwise
+  // potentially go unnoticed
+
+  cudaError_t err;
+
+  err = cudaThreadSynchronize();
+  if (err != cudaSuccess)
+  {
+    char *e = (char*) cudaGetErrorString(err);
+    fprintf(stderr, "CUDA Error: %s (at %s)", e, label);
+  }
+
+  err = cudaGetLastError();
+  if (err != cudaSuccess)
+  {
+    char *e = (char*) cudaGetErrorString(err);
+    fprintf(stderr, "CUDA Error: %s (at %s)", e, label);
+  }
+}
 int main()
 {
     std::fstream myfile("toyGraph1.txt",std::ios_base::in);
@@ -147,40 +159,44 @@ int main()
        adjMatrix[v][u] = 1;
     } 
     //You can also make a list of neighbors for each node if you want.
-    printAdjMatrix(adjMatrix);
+    //printAdjMatrix(adjMatrix);
 
 
     //TODO: Write serial clustering coefficent code; include timing and error checking
+    std::cout<<"Serial computation:"<<std::endl;
     clustCoeff_Serial(adjMatrix);
-
+    std::cout<<std::endl<<"Parallel computation:"<<std::endl;
     //TODO: Write parallel clustering cofficient code; include timing and error checking
-    float d_input[n*n];
-    float d_temp[n*n];
+    int *d_input;
+    int *d_temp = new int[n*n];
     float *d_output;
     float *h_gpu_result = (float*)malloc(n*sizeof(float));
-    cudaMalloc((void **) &d_input, sizeof(adjMatrix));
+    cudaMalloc((void **) &d_input, sizeof(int)*n*n);
     cudaMalloc((void **) &d_output, n*sizeof(float));
-
+    checkErrors("MAlloc");
     for (int i =0;i<n;i++){
 	for(int j =0;j<n;j++){
 	d_temp[(i*n)+j]=adjMatrix[i][j]; 
 	}
     }
     //Source array maps values properly
-    for(int i=0;i<n*n;i++)
-    {
-	printf("%f\n",d_temp[i]);
-    }
     //Copying source array to device seems to not be working
-    cudaMemcpy(d_input, d_temp, (n*n*sizeof(float)), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_input, d_temp, (n*n*sizeof(int)), cudaMemcpyHostToDevice);
+    checkErrors("memCopy");
+
     clustCoeff_Parallel<<<blocks,threads_per_block>>>(d_input,d_output,n);
-    cudaThreadSynchronize();
+    //cudaThreadSynchronize();
     cudaMemcpy(h_gpu_result, d_output, n*sizeof(float), cudaMemcpyDeviceToHost);
-    cudaFree(d_output);
-    cudaFree(d_input);
+    cudaThreadSynchronize();
+    //cudaFree(d_output);
+    //cudaFree(d_input);
+    float coef=0.0;
     for(int j =0;j<n;j++){
+    coef += h_gpu_result[j];
     std::cout<<j<<": "<<h_gpu_result[j]<<std::endl;
     }
+        
+    std::cout<<"Coeffecient is: "<<(coef/n)<<std::endl;
     //TODO: Compare serial and parallel results
 
     return 0;
